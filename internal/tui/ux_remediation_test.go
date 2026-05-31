@@ -56,6 +56,28 @@ func TestOpenSearchPaletteUsesSearchSpecificChrome(t *testing.T) {
 	}
 }
 
+func TestSettingsModalShowsAndBuildsSearchDebounceSetting(t *testing.T) {
+	app := newUXTestApp()
+	app.config.SearchDebounce = 450 * time.Millisecond
+	modal := app.settingsModal
+
+	modal.Show()
+	defer modal.Hide()
+
+	if got := modal.searchDebounceField.GetText(); got != "450ms" {
+		t.Fatalf("search debounce field = %q, want 450ms", got)
+	}
+
+	modal.searchDebounceField.SetText("600ms")
+	settings, err := modal.settingsFromForm()
+	if err != nil {
+		t.Fatalf("settingsFromForm() error: %v", err)
+	}
+	if settings.SearchDebounce != "600ms" {
+		t.Fatalf("SearchDebounce = %q, want 600ms", settings.SearchDebounce)
+	}
+}
+
 func TestCreateIssueModalShowWithOptionsResetsFocusAndShowsParentContext(t *testing.T) {
 	app := newUXTestApp()
 	modal := app.createIssueModal

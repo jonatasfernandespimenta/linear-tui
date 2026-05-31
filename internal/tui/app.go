@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -206,6 +207,10 @@ type App struct {
 	richFilters   IssueFilters
 	sortField     SortField
 	statusMessage string
+
+	searchDebounceTimer      *time.Timer
+	searchDebounceMu         sync.Mutex
+	searchDebounceGeneration atomic.Int64
 
 	// Cached metadata for currently selected team
 	currentUser    *linearapi.User
@@ -565,6 +570,7 @@ func (a *App) resetCachedState() {
 	a.teamCycles = nil
 	a.richFilters = IssueFilters{}
 	a.searchQuery = ""
+	a.cancelSearchDebounce()
 	a.activeIssuesSection = IssuesSectionOther
 	a.expandedState = make(map[string]bool)
 
@@ -1101,6 +1107,7 @@ func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyEscape:
 		if a.paletteCtrl.IsSearchMode() {
 			// In search mode, clear search and close palette
+			a.cancelSearchDebounce()
 			a.closePaletteUI()
 			a.setSearchQuery("")
 			return nil
@@ -1111,6 +1118,7 @@ func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 		if a.paletteCtrl.IsSearchMode() {
 			// In search mode, submit the search query
 			query := a.paletteCtrl.Query()
+			a.cancelSearchDebounce()
 			a.closePaletteUI()      // Close UI without changing focus
 			a.setSearchQuery(query) // This will set focus to issues pane
 			return nil
@@ -1139,7 +1147,9 @@ func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 		if len(query) > 0 {
 			a.paletteCtrl.SetQuery(query[:len(query)-1])
 			a.paletteInput.SetText(a.paletteCtrl.Query())
-			if !a.paletteCtrl.IsSearchMode() {
+			if a.paletteCtrl.IsSearchMode() {
+				a.scheduleSearchDebounce(a.paletteCtrl.Query())
+			} else {
 				a.updatePaletteList()
 			}
 		}
@@ -1148,7 +1158,9 @@ func (a *App) handlePaletteKey(event *tcell.EventKey) *tcell.EventKey {
 		query := a.paletteCtrl.Query() + string(event.Rune())
 		a.paletteCtrl.SetQuery(query)
 		a.paletteInput.SetText(query)
-		if !a.paletteCtrl.IsSearchMode() {
+		if a.paletteCtrl.IsSearchMode() {
+			a.scheduleSearchDebounce(query)
+		} else {
 			a.updatePaletteList()
 		}
 		return nil
@@ -1398,6 +1410,7 @@ func (a *App) openSearchPalette() {
 
 // closePalette closes the command palette overlay.
 func (a *App) closePalette() {
+	a.cancelSearchDebounce()
 	a.paletteCtrl.SetSearchMode(false)
 	a.pages.HidePage("palette")
 	a.focusedPane = FocusNavigation
@@ -1407,8 +1420,49 @@ func (a *App) closePalette() {
 // closePaletteUI closes the palette UI without changing focus.
 // This is used when focus will be set by the caller (e.g., after search).
 func (a *App) closePaletteUI() {
+	a.cancelSearchDebounce()
 	a.paletteCtrl.SetSearchMode(false)
 	a.pages.HidePage("palette")
+}
+
+func (a *App) searchDebounceDelay() time.Duration {
+	if a.config.SearchDebounce > 0 {
+		return a.config.SearchDebounce
+	}
+	return config.DefaultSearchDebounce
+}
+
+func (a *App) scheduleSearchDebounce(query string) {
+	delay := a.searchDebounceDelay()
+	generation := a.searchDebounceGeneration.Add(1)
+
+	a.searchDebounceMu.Lock()
+	if a.searchDebounceTimer != nil {
+		a.searchDebounceTimer.Stop()
+	}
+	a.searchDebounceTimer = time.AfterFunc(delay, func() {
+		if generation != a.searchDebounceGeneration.Load() {
+			return
+		}
+		a.QueueUpdateDraw(func() {
+			if generation != a.searchDebounceGeneration.Load() || !a.paletteCtrl.IsSearchMode() {
+				return
+			}
+			a.setSearchQueryWithFocusChange(query, false)
+		})
+	})
+	a.searchDebounceMu.Unlock()
+}
+
+func (a *App) cancelSearchDebounce() {
+	a.searchDebounceGeneration.Add(1)
+
+	a.searchDebounceMu.Lock()
+	if a.searchDebounceTimer != nil {
+		a.searchDebounceTimer.Stop()
+		a.searchDebounceTimer = nil
+	}
+	a.searchDebounceMu.Unlock()
 }
 
 // queueIssuesRefresh records a refresh request while a fetch is in progress.
@@ -1935,14 +1989,21 @@ func (a *App) onNavigationSelected(node *NavigationNode) {
 
 // setSearchQuery sets the search query and refreshes issues.
 func (a *App) setSearchQuery(query string) {
+	a.cancelSearchDebounce()
+	a.setSearchQueryWithFocusChange(query, true)
+}
+
+func (a *App) setSearchQueryWithFocusChange(query string, allowFocusChange bool) {
 	trimmedQuery := strings.TrimSpace(query)
 	logger.Debug("tui.app: setting search query query=%s", trimmedQuery)
 	a.searchQuery = trimmedQuery
 	// Set focus to issues pane when searching
-	a.focusedPane = FocusIssues
+	if allowFocusChange {
+		a.focusedPane = FocusIssues
+	}
 	a.updateFocus()
 	// Run in goroutine to avoid deadlock when called from tview callbacks
-	go a.refreshIssues()
+	go a.refreshIssuesWithFocusChange(allowFocusChange)
 }
 
 // setSortField sets the sort field and refreshes issues.

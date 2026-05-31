@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/roeyazroel/linear-tui/internal/config"
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
 )
@@ -317,6 +318,108 @@ func TestRefreshIssues_IncludesCycleID(t *testing.T) {
 		t.Fatal("timed out waiting for fetchIssuesPage")
 	}
 	waitForRefreshCompletion(t, refreshDone)
+}
+
+func TestSearchPaletteTypingDebouncesLatestQuery(t *testing.T) {
+	cfg := config.Config{
+		PageSize:       1,
+		CacheTTL:       time.Minute,
+		SearchDebounce: 80 * time.Millisecond,
+	}
+	app := NewApp(&linearapi.Client{}, cfg, nil)
+	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
+
+	called := make(chan linearapi.FetchIssuesParams, 4)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+
+	app.openSearchPalette()
+	app.handlePaletteKey(tcell.NewEventKey(tcell.KeyRune, 'a', tcell.ModNone))
+	app.handlePaletteKey(tcell.NewEventKey(tcell.KeyRune, 'b', tcell.ModNone))
+
+	select {
+	case params := <-called:
+		t.Fatalf("fetch fired before debounce elapsed with search %q", params.Search)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	var params linearapi.FetchIssuesParams
+	select {
+	case params = <-called:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for debounced search fetch")
+	}
+	if params.Search != "ab" {
+		t.Fatalf("Search = %q, want latest query %q", params.Search, "ab")
+	}
+	waitForRefreshCompletion(t, refreshDone)
+
+	if app.focusedPane != FocusPalette {
+		t.Fatalf("focusedPane = %v, want FocusPalette", app.focusedPane)
+	}
+	if !app.paletteCtrl.IsSearchMode() {
+		t.Fatal("palette search mode cleared during live search")
+	}
+
+	select {
+	case params := <-called:
+		t.Fatalf("unexpected extra fetch after debounce fired with search %q", params.Search)
+	case <-time.After(120 * time.Millisecond):
+	}
+}
+
+func TestSearchPaletteEnterFlushesPendingDebounce(t *testing.T) {
+	cfg := config.Config{
+		PageSize:       1,
+		CacheTTL:       time.Minute,
+		SearchDebounce: 250 * time.Millisecond,
+	}
+	app := NewApp(&linearapi.Client{}, cfg, nil)
+	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
+
+	called := make(chan linearapi.FetchIssuesParams, 4)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+
+	app.openSearchPalette()
+	app.handlePaletteKey(tcell.NewEventKey(tcell.KeyRune, 'x', tcell.ModNone))
+	app.handlePaletteKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+	var params linearapi.FetchIssuesParams
+	select {
+	case params = <-called:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for immediate enter search fetch")
+	}
+	if params.Search != "x" {
+		t.Fatalf("Search = %q, want %q", params.Search, "x")
+	}
+	waitForRefreshCompletion(t, refreshDone)
+
+	if app.focusedPane != FocusIssues {
+		t.Fatalf("focusedPane = %v, want FocusIssues", app.focusedPane)
+	}
+	if app.paletteCtrl.IsSearchMode() {
+		t.Fatal("palette search mode still active after enter submit")
+	}
+
+	select {
+	case params := <-called:
+		t.Fatalf("pending debounce was not canceled; extra search %q", params.Search)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 func TestUpdateDetailsView_IncludesCycle(t *testing.T) {
