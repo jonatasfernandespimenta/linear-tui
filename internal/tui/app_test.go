@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -237,5 +238,85 @@ func TestRefreshIssues_IncludesStateID(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for fetchIssuesPage")
+	}
+}
+
+func TestRefreshIssues_IncludesCycleID(t *testing.T) {
+	cfg := config.Config{
+		PageSize: 1,
+		CacheTTL: time.Minute,
+	}
+	app := NewApp(&linearapi.Client{}, cfg, nil)
+	app.queueUpdateDraw = func(f func()) { f() }
+
+	called := make(chan linearapi.FetchIssuesParams, 1)
+	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
+		select {
+		case called <- params:
+		default:
+		}
+		return linearapi.IssuePage{Issues: []linearapi.Issue{}, HasNext: false}, nil
+	}
+
+	app.selectedNavigation = &NavigationNode{
+		ID:        "cycle-123",
+		Text:      "Cycle 12",
+		TeamID:    "team-1",
+		IsCycle:   true,
+		CycleID:   "cycle-123",
+		CycleName: "Cycle 12",
+	}
+
+	app.refreshIssues()
+
+	select {
+	case params := <-called:
+		if params.CycleID != "cycle-123" {
+			t.Fatalf("CycleID = %q, want %q", params.CycleID, "cycle-123")
+		}
+		if params.TeamID != "team-1" {
+			t.Fatalf("TeamID = %q, want %q", params.TeamID, "team-1")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fetchIssuesPage")
+	}
+}
+
+func TestUpdateDetailsView_IncludesCycle(t *testing.T) {
+	cfg := config.Config{
+		PageSize: 1,
+		CacheTTL: time.Minute,
+	}
+	app := NewApp(&linearapi.Client{}, cfg, nil)
+	app.queueUpdateDraw = func(f func()) { f() }
+
+	app.issuesMu.Lock()
+	app.selectedIssue = &linearapi.Issue{
+		ID:         "issue-1",
+		Identifier: "ABC-1",
+		Title:      "Issue with cycle",
+		State:      "Todo",
+		Cycle:      &linearapi.CycleRef{ID: "cycle-1", Name: "Launch", Number: 12},
+	}
+	app.issuesMu.Unlock()
+
+	app.updateDetailsView()
+	text := app.detailsDescriptionView.GetText(true)
+	if !strings.Contains(text, "Cycle:") || !strings.Contains(text, "Launch") {
+		t.Fatalf("details text = %q, want Cycle: Launch", text)
+	}
+}
+
+func TestDefaultCommands_IncludesCycleCommands(t *testing.T) {
+	commands := DefaultCommands(nil)
+	ids := make(map[string]bool, len(commands))
+	for _, command := range commands {
+		ids[command.ID] = true
+	}
+
+	for _, id := range []string{"set_cycle", "clear_cycle"} {
+		if !ids[id] {
+			t.Fatalf("command %q missing from DefaultCommands", id)
+		}
 	}
 }
