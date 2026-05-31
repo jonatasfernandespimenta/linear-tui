@@ -468,6 +468,50 @@ type CreateIssueRelationInput struct {
 	Type           IssueRelationType
 }
 
+type issueMutationNode struct {
+	ID         graphql.String
+	Identifier graphql.String
+	Title      graphql.String
+	State      struct {
+		ID   graphql.String
+		Name graphql.String
+	}
+	Assignee *struct {
+		ID   graphql.String
+		Name graphql.String
+	}
+	Priority    graphql.Float
+	UpdatedAt   graphql.String
+	CreatedAt   graphql.String
+	Description *graphql.String
+	Team        struct {
+		ID graphql.String
+	}
+	Project *struct {
+		ID graphql.String
+	}
+	Cycle *struct {
+		ID         graphql.String
+		Name       *graphql.String
+		Number     graphql.Float
+		StartsAt   graphql.String
+		EndsAt     graphql.String
+		IsActive   graphql.Boolean
+		IsFuture   graphql.Boolean
+		IsPast     graphql.Boolean
+		IsNext     graphql.Boolean
+		IsPrevious graphql.Boolean
+	}
+	Labels struct {
+		Nodes []struct {
+			ID    graphql.String
+			Name  graphql.String
+			Color graphql.String
+		}
+	}
+	URL graphql.String
+}
+
 // NewClient creates a new Linear API client with the provided configuration.
 func NewClient(cfg ClientConfig) *Client {
 	endpoint := cfg.Endpoint
@@ -2149,49 +2193,7 @@ func (c *Client) UpdateIssue(ctx context.Context, input UpdateIssueInput) (Issue
 	var mutation struct {
 		IssueUpdate struct {
 			Success graphql.Boolean
-			Issue   struct {
-				ID         graphql.String
-				Identifier graphql.String
-				Title      graphql.String
-				State      struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Assignee *struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Priority    graphql.Float
-				UpdatedAt   graphql.String
-				CreatedAt   graphql.String
-				Description *graphql.String
-				Team        struct {
-					ID graphql.String
-				}
-				Project *struct {
-					ID graphql.String
-				}
-				Cycle *struct {
-					ID         graphql.String
-					Name       *graphql.String
-					Number     graphql.Float
-					StartsAt   graphql.String
-					EndsAt     graphql.String
-					IsActive   graphql.Boolean
-					IsFuture   graphql.Boolean
-					IsPast     graphql.Boolean
-					IsNext     graphql.Boolean
-					IsPrevious graphql.Boolean
-				}
-				Labels struct {
-					Nodes []struct {
-						ID    graphql.String
-						Name  graphql.String
-						Color graphql.String
-					}
-				}
-				URL graphql.String
-			}
+			Issue   issueMutationNode
 		} `graphql:"issueUpdate(id: $id, input: $input)"`
 	}
 
@@ -2276,57 +2278,7 @@ func (c *Client) UpdateIssue(ctx context.Context, input UpdateIssueInput) (Issue
 		return Issue{}, fmt.Errorf("update issue %s: operation failed", input.ID)
 	}
 
-	node := mutation.IssueUpdate.Issue
-	updatedAt := parseTime(string(node.UpdatedAt))
-	createdAt := parseTime(string(node.CreatedAt))
-
-	assignee := ""
-	assigneeID := ""
-	if node.Assignee != nil {
-		assignee = string(node.Assignee.Name)
-		assigneeID = string(node.Assignee.ID)
-	}
-
-	description := ""
-	if node.Description != nil {
-		description = string(*node.Description)
-	}
-
-	projectID := ""
-	if node.Project != nil {
-		projectID = string(node.Project.ID)
-	}
-
-	cycle := parseCycleRef(node.Cycle)
-
-	// Parse labels
-	labels := make([]IssueLabel, 0, len(node.Labels.Nodes))
-	for _, lbl := range node.Labels.Nodes {
-		labels = append(labels, IssueLabel{
-			ID:    string(lbl.ID),
-			Name:  string(lbl.Name),
-			Color: string(lbl.Color),
-		})
-	}
-
-	return Issue{
-		ID:          string(node.ID),
-		Identifier:  string(node.Identifier),
-		Title:       string(node.Title),
-		State:       string(node.State.Name),
-		StateID:     string(node.State.ID),
-		Assignee:    assignee,
-		AssigneeID:  assigneeID,
-		Priority:    int(node.Priority),
-		UpdatedAt:   updatedAt,
-		CreatedAt:   createdAt,
-		Description: description,
-		TeamID:      string(node.Team.ID),
-		ProjectID:   projectID,
-		Cycle:       cycle,
-		URL:         string(node.URL),
-		Labels:      labels,
-	}, nil
+	return c.parseIssueNode(mutation.IssueUpdate.Issue), nil
 }
 
 // CreateIssueRelation creates a relation between two issues.
@@ -2421,49 +2373,7 @@ func (c *Client) setIssueSubscription(ctx context.Context, issueID string, subsc
 		var mutation struct {
 			IssueSubscribe struct {
 				Success graphql.Boolean
-				Issue   struct {
-					ID         graphql.String
-					Identifier graphql.String
-					Title      graphql.String
-					State      struct {
-						ID   graphql.String
-						Name graphql.String
-					}
-					Assignee *struct {
-						ID   graphql.String
-						Name graphql.String
-					}
-					Priority    graphql.Float
-					UpdatedAt   graphql.String
-					CreatedAt   graphql.String
-					Description *graphql.String
-					Team        struct {
-						ID graphql.String
-					}
-					Project *struct {
-						ID graphql.String
-					}
-					Cycle *struct {
-						ID         graphql.String
-						Name       *graphql.String
-						Number     graphql.Float
-						StartsAt   graphql.String
-						EndsAt     graphql.String
-						IsActive   graphql.Boolean
-						IsFuture   graphql.Boolean
-						IsPast     graphql.Boolean
-						IsNext     graphql.Boolean
-						IsPrevious graphql.Boolean
-					}
-					Labels struct {
-						Nodes []struct {
-							ID    graphql.String
-							Name  graphql.String
-							Color graphql.String
-						}
-					}
-					URL graphql.String
-				}
+				Issue   issueMutationNode
 			} `graphql:"issueSubscribe(id: $id)"`
 		}
 		variables := map[string]interface{}{"id": graphql.String(issueID)}
@@ -2479,49 +2389,7 @@ func (c *Client) setIssueSubscription(ctx context.Context, issueID string, subsc
 	var mutation struct {
 		IssueUnsubscribe struct {
 			Success graphql.Boolean
-			Issue   struct {
-				ID         graphql.String
-				Identifier graphql.String
-				Title      graphql.String
-				State      struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Assignee *struct {
-					ID   graphql.String
-					Name graphql.String
-				}
-				Priority    graphql.Float
-				UpdatedAt   graphql.String
-				CreatedAt   graphql.String
-				Description *graphql.String
-				Team        struct {
-					ID graphql.String
-				}
-				Project *struct {
-					ID graphql.String
-				}
-				Cycle *struct {
-					ID         graphql.String
-					Name       *graphql.String
-					Number     graphql.Float
-					StartsAt   graphql.String
-					EndsAt     graphql.String
-					IsActive   graphql.Boolean
-					IsFuture   graphql.Boolean
-					IsPast     graphql.Boolean
-					IsNext     graphql.Boolean
-					IsPrevious graphql.Boolean
-				}
-				Labels struct {
-					Nodes []struct {
-						ID    graphql.String
-						Name  graphql.String
-						Color graphql.String
-					}
-				}
-				URL graphql.String
-			}
+			Issue   issueMutationNode
 		} `graphql:"issueUnsubscribe(id: $id)"`
 	}
 	variables := map[string]interface{}{"id": graphql.String(issueID)}

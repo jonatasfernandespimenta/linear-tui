@@ -29,6 +29,33 @@ func waitForCondition(t *testing.T, timeout time.Duration, check func() bool) {
 	t.Fatalf("condition not met within %s", timeout)
 }
 
+func installRefreshCompletionHook(app *App) <-chan struct{} {
+	done := make(chan struct{}, 8)
+	app.refreshCompleted = func() {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}
+	return done
+}
+
+func waitForRefreshCompletions(t *testing.T, done <-chan struct{}, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for refresh completion %d of %d", i+1, count)
+		}
+	}
+}
+
+func waitForRefreshCompletion(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	waitForRefreshCompletions(t, done, 1)
+}
+
 // TestRefreshIssues_LazyLoadsPages verifies first page renders before background pages.
 func TestRefreshIssues_LazyLoadsPages(t *testing.T) {
 	cfg := config.Config{
@@ -37,6 +64,7 @@ func TestRefreshIssues_LazyLoadsPages(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	issue1 := linearapi.Issue{ID: "issue-1", Identifier: "ABC-1", Title: "First", State: "Todo"}
 	issue2 := linearapi.Issue{ID: "issue-2", Identifier: "ABC-2", Title: "Second", State: "Todo"}
@@ -85,6 +113,7 @@ func TestRefreshIssues_LazyLoadsPages(t *testing.T) {
 		defer app.issuesMu.RUnlock()
 		return len(app.issues) == 2
 	})
+	waitForRefreshCompletion(t, refreshDone)
 	app.issuesMu.RLock()
 	selectedIssue = app.selectedIssue
 	app.issuesMu.RUnlock()
@@ -101,6 +130,7 @@ func TestRefreshIssues_CancelsStaleLoad(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	issue1 := linearapi.Issue{ID: "issue-1", Identifier: "ABC-1", Title: "First", State: "Todo"}
 	issue2 := linearapi.Issue{ID: "issue-2", Identifier: "ABC-2", Title: "Second", State: "Todo"}
@@ -154,6 +184,7 @@ func TestRefreshIssues_CancelsStaleLoad(t *testing.T) {
 	app.refreshIssues()
 	close(blockNext)
 
+	waitForRefreshCompletions(t, refreshDone, 2)
 	waitForCondition(t, time.Second, func() bool {
 		app.issuesMu.RLock()
 		defer app.issuesMu.RUnlock()
@@ -174,6 +205,7 @@ func TestRefreshIssues_PreservesNavigationFocus(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	issue := linearapi.Issue{ID: "issue-1", Identifier: "ABC-1", Title: "First", State: "Todo"}
 	app.fetchIssueByID = func(ctx context.Context, id string) (linearapi.Issue, error) {
@@ -194,6 +226,7 @@ func TestRefreshIssues_PreservesNavigationFocus(t *testing.T) {
 		defer app.issuesMu.RUnlock()
 		return len(app.issues) == 1
 	})
+	waitForRefreshCompletion(t, refreshDone)
 
 	if app.focusedPane != FocusNavigation {
 		t.Fatalf("focusedPane = %v, want %v", app.focusedPane, FocusNavigation)
@@ -207,6 +240,7 @@ func TestRefreshIssues_IncludesStateID(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	called := make(chan linearapi.FetchIssuesParams, 1)
 	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
@@ -239,6 +273,7 @@ func TestRefreshIssues_IncludesStateID(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for fetchIssuesPage")
 	}
+	waitForRefreshCompletion(t, refreshDone)
 }
 
 func TestRefreshIssues_IncludesCycleID(t *testing.T) {
@@ -248,6 +283,7 @@ func TestRefreshIssues_IncludesCycleID(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	called := make(chan linearapi.FetchIssuesParams, 1)
 	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
@@ -280,6 +316,7 @@ func TestRefreshIssues_IncludesCycleID(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for fetchIssuesPage")
 	}
+	waitForRefreshCompletion(t, refreshDone)
 }
 
 func TestUpdateDetailsView_IncludesCycle(t *testing.T) {

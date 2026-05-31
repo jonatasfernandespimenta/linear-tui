@@ -10,10 +10,6 @@ import (
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
 )
 
-func floatPtr(value float64) *float64 {
-	return &value
-}
-
 func TestRenderIssueRow_IncludesPlanningFields(t *testing.T) {
 	dueDate := "2026-06-15"
 	estimate := 5.0
@@ -116,6 +112,7 @@ func TestRefreshIssues_AppliesRichFiltersWithNavigationAndSearch(t *testing.T) {
 	}
 	app := NewApp(&linearapi.Client{}, cfg, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 
 	estimate := 3.0
 	app.searchQuery = "database"
@@ -171,9 +168,10 @@ func TestRefreshIssues_AppliesRichFiltersWithNavigationAndSearch(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for fetchIssuesPage")
 	}
+	waitForRefreshCompletion(t, refreshDone)
 }
 
-func TestDefaultCommands_IncludesP1CommandsWithoutReactions(t *testing.T) {
+func TestDefaultCommands_IncludesPlanningCommandsWithoutReactions(t *testing.T) {
 	commands := DefaultCommands(nil)
 	ids := make(map[string]bool, len(commands))
 	for _, command := range commands {
@@ -202,6 +200,7 @@ func TestDefaultCommands_IncludesP1CommandsWithoutReactions(t *testing.T) {
 func TestIssueRelationActionDispatchesExpectedAPIInput(t *testing.T) {
 	app := NewApp(&linearapi.Client{}, config.Config{PageSize: 1, CacheTTL: time.Minute}, nil)
 	app.queueUpdateDraw = func(f func()) { f() }
+	refreshDone := installRefreshCompletionHook(app)
 	app.fetchIssuesPage = func(ctx context.Context, params linearapi.FetchIssuesParams, after *string) (linearapi.IssuePage, error) {
 		return linearapi.IssuePage{Issues: nil, HasNext: false}, nil
 	}
@@ -228,6 +227,7 @@ func TestIssueRelationActionDispatchesExpectedAPIInput(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for relation API call")
 	}
+	waitForRefreshCompletion(t, refreshDone)
 }
 
 func TestAttachmentActionsUseInjectedOpenAndCopyFunctions(t *testing.T) {

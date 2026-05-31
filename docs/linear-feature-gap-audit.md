@@ -10,14 +10,14 @@ This audit compares the current TUI surface with the main Linear API/product are
 
 ## Prioritized Gaps
 
-### P1: Issue Planning Fields
+### Issue Planning Fields
 
 - Due dates: show, set, clear, and filter by due date.
 - Estimates: show and edit issue estimate/points.
 - Project milestones: list milestones, show milestone on issues, assign/clear milestone.
 - Rich filters: combine assignee, labels, status, project, cycle, due date, estimate, and text search without relying only on navigation plus global search.
 
-### P1: Issue Relationships And Collaboration
+### Issue Relationships And Collaboration
 
 - Issue relations/dependencies: blocked by, blocking, related, duplicate, and similar issue links.
 - Subscribers: show subscribers and subscribe/unsubscribe the current user.

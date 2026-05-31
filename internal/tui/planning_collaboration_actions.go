@@ -61,7 +61,7 @@ func (a *App) runIssueUpdate(input linearapi.UpdateIssueInput, successMessage st
 		_, err := updateIssue(context.Background(), input)
 		a.QueueUpdateDraw(func() {
 			if err != nil {
-				logger.ErrorWithErr(err, "tui.p1: issue update failed issue=%s", issue.Identifier)
+				logger.ErrorWithErr(err, "tui.planning: issue update failed issue=%s", issue.Identifier)
 				a.updateStatusBarWithError(err)
 				return
 			}

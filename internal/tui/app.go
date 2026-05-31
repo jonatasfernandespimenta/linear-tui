@@ -233,6 +233,7 @@ type App struct {
 	unsubscribeIssueFunc    func(context.Context, string) (linearapi.Issue, error)
 	openURLFunc             func(string) error
 	copyToClipboardFunc     func(string) error
+	refreshCompleted        func()
 
 	// UI update mutex (for test safety when queueUpdateDraw executes immediately)
 	uiUpdateMu sync.Mutex
@@ -1441,6 +1442,12 @@ func (a *App) runQueuedIssuesRefresh() {
 	go a.refreshIssuesWithFocusChange(allowFocusChange)
 }
 
+func (a *App) notifyRefreshCompleted() {
+	if a.refreshCompleted != nil {
+		a.refreshCompleted()
+	}
+}
+
 // refreshIssues fetches issues from the API and updates the UI.
 // If issueID is provided, that issue will be selected after refresh.
 func (a *App) refreshIssues(issueID ...string) {
@@ -1509,6 +1516,7 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 				a.isLoading = false
 				logger.ErrorWithErr(err, "tui.app: failed to fetch issues")
 				a.updateStatusBarWithError(err)
+				a.notifyRefreshCompleted()
 				a.runQueuedIssuesRefresh()
 			})
 			return
@@ -1516,6 +1524,7 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 		if generation != a.refreshGeneration.Load() {
 			a.QueueUpdateDraw(func() {
 				a.isLoading = false
+				a.notifyRefreshCompleted()
 				a.runQueuedIssuesRefresh()
 			})
 			return
@@ -1569,6 +1578,7 @@ func (a *App) refreshIssuesWithFocusChange(allowFocusChange bool, issueID ...str
 			a.isLoading = false
 			logger.Debug("tui.app: refresh completed pages=%d total_fetched=%d", pageCount, fetchedCount)
 			a.updateStatusBar()
+			a.notifyRefreshCompleted()
 			a.runQueuedIssuesRefresh()
 		})
 	}()

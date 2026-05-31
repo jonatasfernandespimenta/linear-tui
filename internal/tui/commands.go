@@ -131,6 +131,83 @@ func handleAskAgent(a *App) {
 	})
 }
 
+func runIssueUpdateCommand(a *App, issue *linearapi.Issue, input linearapi.UpdateIssueInput, logAction, successMessage string) {
+	input.ID = issue.ID
+	go func() {
+		ctx := context.Background()
+		_, err := a.GetAPI().UpdateIssue(ctx, input)
+		a.QueueUpdateDraw(func() {
+			if err != nil {
+				logger.ErrorWithErr(err, "tui.commands: failed to %s issue=%s", logAction, issue.Identifier)
+				a.updateStatusBarWithError(err)
+				return
+			}
+			logger.Info("tui.commands: %s issue=%s", logAction, issue.Identifier)
+			a.flashStatus(successMessage)
+			go a.refreshIssues(issue.ID)
+		})
+	}()
+}
+
+func handleOpenBrowserCommand(a *App) {
+	issue := a.GetSelectedIssue()
+	if issue == nil {
+		a.flashStatus("No issue selected")
+		return
+	}
+	if issue.URL == "" {
+		a.flashStatus(fmt.Sprintf("No URL for %s", issue.Identifier))
+		return
+	}
+	openFn := a.openURLFunc
+	if openFn == nil {
+		openFn = openURL
+	}
+	if err := openFn(issue.URL); err != nil {
+		a.updateStatusBarWithError(err)
+		return
+	}
+	a.flashStatus(fmt.Sprintf("Opened %s: %s", issue.Identifier, issue.URL))
+}
+
+func handleCopyIssueIDCommand(a *App) {
+	issue := a.GetSelectedIssue()
+	if issue == nil {
+		a.flashStatus("No issue selected")
+		return
+	}
+	copyFn := a.copyToClipboardFunc
+	if copyFn == nil {
+		copyFn = copyToClipboard
+	}
+	if err := copyFn(issue.Identifier); err != nil {
+		a.updateStatusBarWithError(err)
+		return
+	}
+	a.flashStatus(fmt.Sprintf("Copied issue ID: %s", issue.Identifier))
+}
+
+func handleCopyIssueURLCommand(a *App) {
+	issue := a.GetSelectedIssue()
+	if issue == nil {
+		a.flashStatus("No issue selected")
+		return
+	}
+	if issue.URL == "" {
+		a.flashStatus(fmt.Sprintf("No URL for %s", issue.Identifier))
+		return
+	}
+	copyFn := a.copyToClipboardFunc
+	if copyFn == nil {
+		copyFn = copyToClipboard
+	}
+	if err := copyFn(issue.URL); err != nil {
+		a.updateStatusBarWithError(err)
+		return
+	}
+	a.flashStatus(fmt.Sprintf("Copied issue URL: %s", issue.Identifier))
+}
+
 // DefaultCommands returns the default set of commands for the palette.
 func DefaultCommands(app *App) []Command {
 	lookPath := exec.LookPath
@@ -216,74 +293,21 @@ func DefaultCommands(app *App) []Command {
 			Title:        "Open in browser",
 			Keywords:     []string{"open", "browser", "o", "web"},
 			ShortcutRune: 'o',
-			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
-					a.flashStatus("No issue selected")
-					return
-				}
-				if issue.URL == "" {
-					a.flashStatus(fmt.Sprintf("No URL for %s", issue.Identifier))
-					return
-				}
-				openFn := a.openURLFunc
-				if openFn == nil {
-					openFn = openURL
-				}
-				if err := openFn(issue.URL); err != nil {
-					a.updateStatusBarWithError(err)
-					return
-				}
-				a.flashStatus(fmt.Sprintf("Opened %s: %s", issue.Identifier, issue.URL))
-			},
+			Run:          handleOpenBrowserCommand,
 		},
 		{
 			ID:           "copy_id",
 			Title:        "Copy issue ID",
 			Keywords:     []string{"copy", "id", "c", "identifier"},
 			ShortcutRune: 'y',
-			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
-					a.flashStatus("No issue selected")
-					return
-				}
-				copyFn := a.copyToClipboardFunc
-				if copyFn == nil {
-					copyFn = copyToClipboard
-				}
-				if err := copyFn(issue.Identifier); err != nil {
-					a.updateStatusBarWithError(err)
-					return
-				}
-				a.flashStatus(fmt.Sprintf("Copied issue ID: %s", issue.Identifier))
-			},
+			Run:          handleCopyIssueIDCommand,
 		},
 		{
 			ID:           "copy_url",
 			Title:        "Copy issue URL",
 			Keywords:     []string{"copy", "url", "link"},
 			ShortcutRune: 'w', // 'w' for web URL
-			Run: func(a *App) {
-				issue := a.GetSelectedIssue()
-				if issue == nil {
-					a.flashStatus("No issue selected")
-					return
-				}
-				if issue.URL == "" {
-					a.flashStatus(fmt.Sprintf("No URL for %s", issue.Identifier))
-					return
-				}
-				copyFn := a.copyToClipboardFunc
-				if copyFn == nil {
-					copyFn = copyToClipboard
-				}
-				if err := copyFn(issue.URL); err != nil {
-					a.updateStatusBarWithError(err)
-					return
-				}
-				a.flashStatus(fmt.Sprintf("Copied issue URL: %s", issue.Identifier))
-			},
+			Run:          handleCopyIssueURLCommand,
 		},
 		{
 			ID:       "ask_agent",
@@ -616,23 +640,7 @@ func DefaultCommands(app *App) []Command {
 					return
 				}
 				a.ShowCyclePicker(func(cycleID string) {
-					go func() {
-						ctx := context.Background()
-						_, err := a.GetAPI().UpdateIssue(ctx, linearapi.UpdateIssueInput{
-							ID:      issue.ID,
-							CycleID: &cycleID,
-						})
-						a.QueueUpdateDraw(func() {
-							if err != nil {
-								logger.ErrorWithErr(err, "tui.commands: failed to set cycle issue=%s", issue.Identifier)
-								a.updateStatusBarWithError(err)
-								return
-							}
-							logger.Info("tui.commands: set cycle issue=%s", issue.Identifier)
-							a.flashStatus(fmt.Sprintf("Set cycle for %s", issue.Identifier))
-							go a.refreshIssues(issue.ID)
-						})
-					}()
+					runIssueUpdateCommand(a, issue, linearapi.UpdateIssueInput{CycleID: &cycleID}, "set cycle", fmt.Sprintf("Set cycle for %s", issue.Identifier))
 				})
 			},
 		},
@@ -682,23 +690,7 @@ func DefaultCommands(app *App) []Command {
 					return
 				}
 				a.ShowUserPicker(func(userID string) {
-					go func() {
-						ctx := context.Background()
-						_, err := a.GetAPI().UpdateIssue(ctx, linearapi.UpdateIssueInput{
-							ID:         issue.ID,
-							AssigneeID: &userID,
-						})
-						a.QueueUpdateDraw(func() {
-							if err != nil {
-								logger.ErrorWithErr(err, "tui.commands: failed to assign issue to user issue=%s", issue.Identifier)
-								a.updateStatusBarWithError(err)
-								return
-							}
-							logger.Info("tui.commands: assigned issue to user issue=%s", issue.Identifier)
-							a.flashStatus(fmt.Sprintf("Assigned %s", issue.Identifier))
-							go a.refreshIssues(issue.ID)
-						})
-					}()
+					runIssueUpdateCommand(a, issue, linearapi.UpdateIssueInput{AssigneeID: &userID}, "assign issue to user", fmt.Sprintf("Assigned %s", issue.Identifier))
 				})
 			},
 		},

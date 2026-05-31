@@ -324,11 +324,12 @@ func (cm *CreateIssueModal) populateCycleDropdown(cycles []linearapi.Cycle) {
 	selectedIndex := 0
 	for _, cycle := range cycles {
 		displayName := cycle.DisplayName()
-		if cycle.IsActive {
+		switch {
+		case cycle.IsActive:
 			displayName += " (active)"
-		} else if cycle.IsNext {
+		case cycle.IsNext:
 			displayName += " (next)"
-		} else if cycle.IsPrevious {
+		case cycle.IsPrevious:
 			displayName += " (previous)"
 		}
 		cycleOptions = append(cycleOptions, displayName)
