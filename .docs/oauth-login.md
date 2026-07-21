@@ -171,7 +171,7 @@ const (
   AuthorizeURL   = "https://linear.app/oauth/authorize"
   TokenURL       = "https://api.linear.app/oauth/token"
   RevokeURL      = "https://api.linear.app/oauth/revoke"
-  DefaultClientID = "" // filled once OAuth app exists; overridable via LINEAR_CLIENT_ID
+  DefaultClientID = "ea40a3da4d4511d43a97ce7691dc315d"
   RedirectHost   = "127.0.0.1"
   RedirectPort   = 53682
   RedirectPath   = "/callback"
@@ -387,23 +387,24 @@ Until `DefaultClientID` is set, login must error with clear instructions to set 
 - [x] Research issue #12 and Linear OAuth PKCE docs
 - [x] Map current env-only auth path (`main`, `config`, `linearapi.authTransport`)
 - [x] Write this plan (Non-TDD)
+- [x] Approve plan / set `DefaultClientID` (`ea40a3da4d4511d43a97ce7691dc315d`)
+- [x] Add `internal/auth/oauth` token client (exchange, refresh, revoke) + tests
+- [x] Add PKCE/state helpers + credentials store (`0600`) + tests
+- [x] Implement `Login` loopback server + browser open + timeout
+- [x] Implement `Logout` revoke-best-effort + delete store
+- [x] Wire `auth login` / `auth logout` in `cmd/linear-tui`
+- [x] Change startup auth resolution: env override → OAuth store → clear error
+- [x] Update `linearapi` auth transport for Bearer vs raw + 401 refresh-once
+- [x] Update README / CONTRIBUTING auth docs
+- [x] Embed `DefaultClientID` / document `LINEAR_CLIENT_ID`
+- [x] Run `go test ./...`
 
 ### In Progress
 
-- [ ] Approve plan / set `DefaultClientID` ownership (maintainer OAuth app)
-
 ### Future
 
-- [ ] Add `internal/auth/oauth` token client (exchange, refresh, revoke) + tests
-- [ ] Add PKCE/state helpers + credentials store (`0600`) + tests
-- [ ] Implement `Login` loopback server + browser open + timeout
-- [ ] Implement `Logout` revoke-best-effort + delete store
-- [ ] Wire `auth login` / `auth logout` in `cmd/linear-tui`
-- [ ] Change startup auth resolution: env override → OAuth store → clear error
-- [ ] Update `linearapi` auth transport for Bearer vs raw + 401 refresh-once
-- [ ] Update README / CONTRIBUTING auth docs
-- [ ] Embed or document `LINEAR_CLIENT_ID` / redirect URI registration
-- [ ] Run `go test ./...` and lint before merge
+- [ ] Manual end-to-end browser login against Linear OAuth app redirect URI
+- [ ] Optional device-code flow for headless/SSH environments
 
 ## Relevant Files
 
@@ -423,4 +424,4 @@ Until `DefaultClientID` is set, login must error with clear instructions to set 
 
 ## Approval Gate
 
-PLAN must be approved before EXECUTE (`do exe`). Blocking product decision: who registers the Linear OAuth app and supplies `DefaultClientID` (project-owned public client recommended).
+Plan approved with embedded `DefaultClientID=ea40a3da4d4511d43a97ce7691dc315d`. EXECUTE complete pending manual browser verification that the OAuth app callback is registered as `http://127.0.0.1:53682/callback`.
