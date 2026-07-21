@@ -162,10 +162,7 @@ func Login(ctx context.Context, opts LoginOptions) error {
 	}
 
 	creds := CredentialsFromTokenResponse(token, time.Now())
-	if err := SaveCredentials(opts.StorePath, creds); err != nil {
-		return err
-	}
-	return nil
+	return SaveCredentials(opts.StorePath, creds)
 }
 
 // buildAuthorizeURL constructs the Linear authorize URL with PKCE parameters.

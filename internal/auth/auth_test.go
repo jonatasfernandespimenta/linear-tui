@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -98,7 +99,7 @@ func TestCredentialsStoreRoundTrip(t *testing.T) {
 	if err := auth.DeleteCredentials(path); err != nil {
 		t.Fatalf("DeleteCredentials() idempotent error: %v", err)
 	}
-	if _, err := auth.LoadCredentials(path); err != auth.ErrCredentialsNotFound {
+	if _, err := auth.LoadCredentials(path); !errors.Is(err, auth.ErrCredentialsNotFound) {
 		t.Fatalf("LoadCredentials() after delete = %v", err)
 	}
 }
@@ -350,7 +351,7 @@ func TestLogoutDeletesEvenWhenRevokeFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
-	if _, err := auth.LoadCredentials(path); err != auth.ErrCredentialsNotFound {
+	if _, err := auth.LoadCredentials(path); !errors.Is(err, auth.ErrCredentialsNotFound) {
 		t.Fatalf("expected credentials removed, got %v", err)
 	}
 }
