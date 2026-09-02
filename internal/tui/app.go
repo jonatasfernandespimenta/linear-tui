@@ -12,6 +12,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"github.com/roeyazroel/linear-tui/internal/agents"
+	"github.com/roeyazroel/linear-tui/internal/auth"
+	"github.com/roeyazroel/linear-tui/internal/auth/oauth"
 	"github.com/roeyazroel/linear-tui/internal/cache"
 	"github.com/roeyazroel/linear-tui/internal/config"
 	"github.com/roeyazroel/linear-tui/internal/linearapi"
@@ -253,6 +255,25 @@ type App struct {
 	// Details pane sub-view focus
 	focusedDetailsView     bool // false = description, true = comments
 	detailsCommentsVisible bool // Tracks whether comments view is shown
+
+	// Multi-workspace authentication state (protected by workspaceMu)
+	workspaceMu          sync.RWMutex
+	workspaceStorePath   string
+	workspaceOAuth       *oauth.Client
+	workspaceClientID    string
+	workspaceEnvOverride bool
+	workspaceID          string
+	workspaceName        string
+	workspaceProfiles    []auth.WorkspaceProfile
+	// workspaceGeneration invalidates in-flight work started before a switch.
+	workspaceGeneration atomic.Int64
+	workspaceSwitcher   *WorkspaceSwitcherModal
+	// pendingWorkspaceChord tracks the "O" prefix of the O-W switch shortcut.
+	pendingWorkspaceChord bool
+
+	// Workspace helpers (overridable in tests)
+	workspaceLoginFunc    func(context.Context, auth.LoginOptions) (auth.WorkspaceProfile, error)
+	identifyWorkspaceFunc auth.IdentifyFunc
 }
 
 // FocusTarget indicates which pane has focus.
@@ -331,16 +352,29 @@ func (a *App) Run() error {
 
 // loadInitialData fetches user, navigation, and issues in a background goroutine.
 func (a *App) loadInitialData() {
+	generation := a.WorkspaceGeneration()
 	go func() {
 		ctx := context.Background()
+
+		// Name the workspace the active token belongs to (status bar).
+		if a.WorkspacesEnabled() {
+			a.loadWorkspaceIdentity(ctx)
+		}
 
 		// Fetch current user first
 		user, err := a.cache.GetCurrentUser(ctx)
 		if err == nil {
+			if generation != a.WorkspaceGeneration() {
+				return
+			}
 			a.currentUser = &user
 			logger.Debug("tui.app: current user loaded user=%s", user.DisplayName)
 		} else {
 			logger.Warning("tui.app: failed to load current user error=%v", err)
+		}
+
+		if generation != a.WorkspaceGeneration() {
+			return
 		}
 
 		// Fetch teams and build navigation. Default navigation triggers its own
@@ -366,22 +400,11 @@ func (a *App) applySettings(newCfg config.Config) {
 	}
 	logger.Debug("tui.app: settings applied log_file=%s log_level=%s", newCfg.LogFile, newCfg.LogLevel)
 
-	a.api = linearapi.NewClient(linearapi.ClientConfig{
+	a.setAPIClient(linearapi.NewClient(linearapi.ClientConfig{
 		Token:    newCfg.LinearAPIKey,
 		Endpoint: newCfg.APIEndpoint,
 		Timeout:  newCfg.Timeout,
-	})
-	a.cache = cache.NewTeamCache(a.api, newCfg.CacheTTL)
-	a.fetchIssuesPage = a.api.FetchIssuesPage
-	a.fetchIssueByID = a.api.FetchIssueByID
-	a.updateIssueFunc = a.api.UpdateIssue
-	a.createIssueRelationFunc = a.api.CreateIssueRelation
-	a.deleteIssueRelationFunc = a.api.DeleteIssueRelation
-	a.subscribeIssueFunc = a.api.SubscribeToIssue
-	a.unsubscribeIssueFunc = a.api.UnsubscribeFromIssue
-	a.fetchProjectsFunc = a.cache.GetProjects
-	a.fetchWorkflowStatesFunc = a.cache.GetWorkflowStates
-	a.fetchCyclesFunc = a.cache.GetCycles
+	}))
 
 	logger.Debug("tui.app: resetting cached state after settings change")
 	a.resetCachedState()
@@ -493,6 +516,7 @@ func (a *App) rebuildModals() {
 		a.agentOutputModal.ApplyDensity(a.density)
 	}
 	a.confirmationModal = NewConfirmationModal(a)
+	a.workspaceSwitcher = NewWorkspaceSwitcherModal(a)
 }
 
 func (a *App) applyIssuesTableTheme(table *tview.Table) {
@@ -614,17 +638,21 @@ func parseLogLevel(level string) logger.LogLevel {
 // navigation tree. It reports whether default navigation started the initial
 // issue refresh.
 func (a *App) loadNavigationData(ctx context.Context) bool {
+	generation := a.WorkspaceGeneration()
 	teams, err := a.cache.GetTeams(ctx)
 	if err != nil {
 		logger.ErrorWithErr(err, "tui.app: failed to load teams")
-		a.app.QueueUpdateDraw(func() {
+		a.queueWorkspaceUpdate(generation, func() {
 			a.updateStatusBarWithError(err)
 		})
 		return false
 	}
+	if generation != a.WorkspaceGeneration() {
+		return true
+	}
 
 	logger.Debug("tui.app: loaded teams count=%d", len(teams))
-	a.app.QueueUpdateDraw(func() {
+	a.queueWorkspaceUpdate(generation, func() {
 		a.rebuildNavigationTree(teams)
 	})
 	return a.applyDefaultNavigation(ctx, teams)
@@ -885,6 +913,7 @@ func (a *App) buildLayout() {
 	a.agentPromptModal = NewAgentPromptModal(a)
 	a.agentOutputModal = NewAgentOutputModal(a)
 	a.confirmationModal = NewConfirmationModal(a)
+	a.workspaceSwitcher = NewWorkspaceSwitcherModal(a)
 	a.agentRunner = agents.NewRunner()
 
 	// Add main layout to pages
@@ -955,6 +984,11 @@ func (a *App) bindGlobalKeys() {
 			return a.agentOutputModal.HandleKey(event)
 		}
 
+		// Check if the workspace switcher is visible and handle its keys
+		if a.pages.HasPage(workspaceSwitcherPage) && a.workspaceSwitcher != nil {
+			return a.workspaceSwitcher.HandleKey(event)
+		}
+
 		// Handle palette first if it's open
 		if a.focusedPane == FocusPalette {
 			return a.handlePaletteKey(event)
@@ -1020,7 +1054,18 @@ func (a *App) bindGlobalKeys() {
 			}
 			return nil
 		case tcell.KeyRune:
+			// "O" then "W" opens the workspace switcher, mirroring Linear.
+			if a.pendingWorkspaceChord {
+				a.pendingWorkspaceChord = false
+				if event.Rune() == 'w' || event.Rune() == 'W' {
+					a.ShowWorkspaceSwitcher()
+					return nil
+				}
+			}
 			switch event.Rune() {
+			case 'O':
+				a.pendingWorkspaceChord = true
+				return nil
 			case 'q':
 				a.app.Stop()
 				return nil
@@ -1032,6 +1077,7 @@ func (a *App) bindGlobalKeys() {
 				return nil
 			}
 		}
+		a.pendingWorkspaceChord = false
 
 		// Pane-specific shortcuts
 		switch a.focusedPane {
@@ -1992,6 +2038,7 @@ func (a *App) onNavigationSelected(node *NavigationNode) {
 // preloadTeamMetadata warms team-scoped metadata caches for commands and create-issue defaults.
 func (a *App) preloadTeamMetadata(teamID string) {
 	logger.Debug("tui.app: preloading team metadata team_id=%s", teamID)
+	generation := a.WorkspaceGeneration()
 	ctx := context.Background()
 	_ = a.cache.PreloadTeamMetadata(ctx, teamID)
 
@@ -2001,7 +2048,7 @@ func (a *App) preloadTeamMetadata(teamID string) {
 	cycles, _ := a.cache.GetCycles(ctx, teamID)
 
 	logger.Debug("tui.app: loaded team metadata team_id=%s users_count=%d projects_count=%d states_count=%d cycles_count=%d", teamID, len(users), len(projects), len(states), len(cycles))
-	a.app.QueueUpdateDraw(func() {
+	a.queueWorkspaceUpdate(generation, func() {
 		a.teamUsers = users
 		a.teamProjects = projects
 		a.workflowStates = states
@@ -2054,6 +2101,15 @@ func (a *App) updateStatusBar() {
 		helpText = fmt.Sprintf("%sj/k: navigate | Tab: next pane | Shift+Tab: prev pane | :: palette | /: search | q: quit[-]", keyColor)
 	}
 
+	workspaceText := ""
+	if name := a.ActiveWorkspaceName(); name != "" {
+		label := fmt.Sprintf("Workspace: %s", name)
+		if a.WorkspaceEnvOverride() {
+			label += " (ENV)"
+		}
+		workspaceText = fmt.Sprintf("%s%s[-]", a.themeTags.Accent, label)
+	}
+
 	navText := ""
 	if a.selectedNavigation != nil {
 		label := a.selectedNavigation.Text
@@ -2093,6 +2149,9 @@ func (a *App) updateStatusBar() {
 	sep := fmt.Sprintf("%s | [-]", a.themeTags.Border)
 
 	parts := []string{helpText}
+	if workspaceText != "" {
+		parts = append(parts, workspaceText)
+	}
 	if navText != "" {
 		parts = append(parts, navText)
 	}
@@ -2635,6 +2694,18 @@ func (a *App) ShowEditLabelsModal() {
 }
 
 // ShowSettingsModal shows the settings modal.
+// ShowWorkspaceSwitcher opens the workspace switcher overlay.
+func (a *App) ShowWorkspaceSwitcher() {
+	if a.workspaceSwitcher == nil {
+		a.workspaceSwitcher = NewWorkspaceSwitcherModal(a)
+	}
+	if a.WorkspaceEnvOverride() {
+		a.flashStatus(envOverrideMessage)
+	}
+	logger.Debug("tui.app: showing workspace switcher")
+	a.workspaceSwitcher.Show()
+}
+
 func (a *App) ShowSettingsModal() {
 	if a.settingsModal == nil {
 		return

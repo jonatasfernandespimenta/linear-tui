@@ -254,6 +254,30 @@ func DefaultCommands(app *App) []Command {
 			},
 		},
 		{
+			ID:       "switch_workspace",
+			Title:    "Switch Workspace",
+			Keywords: []string{"workspace", "switch", "organization", "org", "account"},
+			Run: func(a *App) {
+				a.ShowWorkspaceSwitcher()
+			},
+		},
+		{
+			ID:       "connect_workspace",
+			Title:    "Connect Workspace",
+			Keywords: []string{"workspace", "connect", "add", "login", "authenticate"},
+			Run: func(a *App) {
+				a.ConnectWorkspace()
+			},
+		},
+		{
+			ID:       "disconnect_workspace",
+			Title:    "Disconnect Workspace",
+			Keywords: []string{"workspace", "disconnect", "remove", "logout", "forget"},
+			Run: func(a *App) {
+				a.DisconnectWorkspace(a.ActiveWorkspaceID())
+			},
+		},
+		{
 			ID:       "edit_prompt_templates",
 			Title:    "Edit agent prompt templates",
 			Keywords: []string{"agent", "prompt", "prompts", "template", "templates"},
