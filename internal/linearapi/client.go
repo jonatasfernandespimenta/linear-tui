@@ -961,6 +961,37 @@ func (c *Client) GetCurrentUser(ctx context.Context) (User, error) {
 	}, nil
 }
 
+// Workspace identifies the Linear workspace (called organization in the API)
+// that the authenticated token belongs to.
+type Workspace struct {
+	ID   string
+	Name string
+	Slug string
+}
+
+// GetWorkspace fetches the workspace the current token is authenticated against.
+func (c *Client) GetWorkspace(ctx context.Context) (Workspace, error) {
+	var query struct {
+		Organization struct {
+			ID     graphql.String
+			Name   graphql.String
+			URLKey graphql.String `graphql:"urlKey"`
+		}
+	}
+
+	err := c.client.Query(ctx, &query, nil)
+	if err != nil {
+		logger.ErrorWithErr(err, "linearapi.client: GetWorkspace failed")
+		return Workspace{}, fmt.Errorf("get workspace: %w", err)
+	}
+
+	return Workspace{
+		ID:   string(query.Organization.ID),
+		Name: string(query.Organization.Name),
+		Slug: string(query.Organization.URLKey),
+	}, nil
+}
+
 // ListWorkflowStates fetches all workflow states for a team.
 func (c *Client) ListWorkflowStates(ctx context.Context, teamID string) ([]WorkflowState, error) {
 	var query struct {

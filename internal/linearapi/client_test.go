@@ -1671,3 +1671,32 @@ func TestIssueRelationMutationsAndSubscriptions(t *testing.T) {
 		t.Fatalf("issueRelationCreate input = %#v, want issue relation input", inputs)
 	}
 }
+
+// TestGetWorkspace_ParsesOrganization verifies workspace identity parsing.
+func TestGetWorkspace_ParsesOrganization(t *testing.T) {
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("Failed to decode request body: %v", err)
+		}
+		gotQuery, _ = reqBody["query"].(string)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"organization":{"id":"org-1","name":"PocketBooks","urlKey":"pocketbooks"}}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{Token: "test-token", Endpoint: server.URL})
+
+	workspace, err := client.GetWorkspace(context.Background())
+	if err != nil {
+		t.Fatalf("GetWorkspace() error: %v", err)
+	}
+	if !strings.Contains(gotQuery, "organization") || !strings.Contains(gotQuery, "urlKey") {
+		t.Fatalf("query = %s, want organization with urlKey", gotQuery)
+	}
+	if workspace.ID != "org-1" || workspace.Name != "PocketBooks" || workspace.Slug != "pocketbooks" {
+		t.Fatalf("workspace = %+v", workspace)
+	}
+}
