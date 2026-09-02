@@ -79,6 +79,27 @@ type WorkspaceIdentity struct {
 // IdentifyFunc resolves the workspace an access token belongs to.
 type IdentifyFunc func(token string) (WorkspaceIdentity, error)
 
+// identifyAttempts is how many times workspace identification is tried before
+// giving up. A completed OAuth authorization is expensive to redo, so a slow or
+// flaky API response must not waste it.
+const identifyAttempts = 3
+
+// identifyWithRetry resolves a token's workspace, retrying transient failures.
+func identifyWithRetry(identify IdentifyFunc, token string) (WorkspaceIdentity, error) {
+	var err error
+	for attempt := range identifyAttempts {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		var identity WorkspaceIdentity
+		identity, err = identify(token)
+		if err == nil {
+			return identity, nil
+		}
+	}
+	return WorkspaceIdentity{}, err
+}
+
 // Store is the persisted set of workspace profiles under credentials.json.
 type Store struct {
 	Version         int                         `json:"version"`
@@ -373,7 +394,7 @@ func MigrateLegacyIfNeeded(path string, identify IdentifyFunc) error {
 	if !ok {
 		return fmt.Errorf("legacy store has no credentials")
 	}
-	identity, err := identify(profile.Auth.AccessToken)
+	identity, err := identifyWithRetry(identify, profile.Auth.AccessToken)
 	if err != nil {
 		return fmt.Errorf("identify existing workspace: %w", err)
 	}

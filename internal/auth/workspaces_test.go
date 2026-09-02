@@ -3,6 +3,7 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -593,5 +594,38 @@ func TestMigrateLegacyIfNeededIdentifiesThenConnects(t *testing.T) {
 		return auth.WorkspaceIdentity{}, nil
 	}); err != nil {
 		t.Fatalf("second MigrateLegacyIfNeeded() error: %v", err)
+	}
+}
+
+func TestMigrateLegacyIfNeededRetriesTransientIdentifyFailures(t *testing.T) {
+	t.Parallel()
+
+	path := legacyCredentialsFile(t, t.TempDir(), auth.Credentials{
+		AccessToken:  "legacy-access",
+		RefreshToken: "legacy-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+
+	calls := 0
+	identify := func(string) (auth.WorkspaceIdentity, error) {
+		calls++
+		if calls == 1 {
+			return auth.WorkspaceIdentity{}, errors.New("context deadline exceeded")
+		}
+		return auth.WorkspaceIdentity{ID: "ws-1", Name: "PocketBooks"}, nil
+	}
+
+	if err := auth.MigrateLegacyIfNeeded(path, identify); err != nil {
+		t.Fatalf("MigrateLegacyIfNeeded() error: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("identify calls = %d, want a retry after the transient failure", calls)
+	}
+	store, err := auth.LoadStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.Profile("ws-1"); !ok {
+		t.Fatalf("workspace not migrated after retry: %+v", store.Workspaces)
 	}
 }

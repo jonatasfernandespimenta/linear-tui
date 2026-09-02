@@ -174,7 +174,7 @@ func Login(ctx context.Context, opts LoginOptions) (WorkspaceProfile, error) {
 		return WorkspaceProfile{}, SaveCredentials(opts.StorePath, creds)
 	}
 
-	identity, err := opts.Identify(creds.AccessToken)
+	identity, err := identifyWithRetry(opts.Identify, creds.AccessToken)
 	if err != nil {
 		// Leave saved workspaces untouched when the workspace cannot be identified.
 		return WorkspaceProfile{}, fmt.Errorf("identify workspace: %w", err)
