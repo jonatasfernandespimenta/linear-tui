@@ -328,6 +328,10 @@ func (a *App) ConnectWorkspace() {
 	a.flashStatus("Opening browser to connect a workspace...")
 
 	go func() {
+		// Identify existing legacy credentials first so they survive the connect.
+		if err := auth.MigrateLegacyIfNeeded(storePath, identify); err != nil {
+			logger.Warning("tui.workspace: could not migrate legacy credentials: %v", err)
+		}
 		profile, err := login(context.Background(), auth.LoginOptions{
 			ClientID:    clientID,
 			StorePath:   storePath,

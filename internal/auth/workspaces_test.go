@@ -516,3 +516,82 @@ func TestSaveStoreWritesValidJSONAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectSecondWorkspaceKeepsLegacyCredentials(t *testing.T) {
+	t.Parallel()
+
+	path := legacyCredentialsFile(t, t.TempDir(), auth.Credentials{
+		AccessToken:  "legacy-access",
+		RefreshToken: "legacy-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+
+	// Connecting another workspace before the legacy file was identified must
+	// not discard the credentials already stored.
+	if _, err := auth.ConnectWorkspace(path, profile("ws-2", "Resilion", "resilion", "a2", "r2")); err != nil {
+		t.Fatalf("ConnectWorkspace() error: %v", err)
+	}
+
+	store, err := auth.LoadStore(path)
+	if err != nil {
+		t.Fatalf("LoadStore() error: %v", err)
+	}
+	if len(store.Workspaces) != 2 {
+		t.Fatalf("workspaces = %+v, want the legacy credentials kept", store.Workspaces)
+	}
+	var kept bool
+	for _, saved := range store.List() {
+		if saved.Auth.AccessToken == "legacy-access" && saved.Auth.RefreshToken == "legacy-refresh" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatalf("legacy credentials were dropped: %+v", store.Workspaces)
+	}
+	if store.ActiveWorkspace != "ws-2" {
+		t.Fatalf("active workspace = %q, want the newly connected one", store.ActiveWorkspace)
+	}
+}
+
+func TestMigrateLegacyIfNeededIdentifiesThenConnects(t *testing.T) {
+	t.Parallel()
+
+	path := legacyCredentialsFile(t, t.TempDir(), auth.Credentials{
+		AccessToken:  "legacy-access",
+		RefreshToken: "legacy-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	})
+
+	identify := func(token string) (auth.WorkspaceIdentity, error) {
+		if token != "legacy-access" {
+			t.Fatalf("identify called with %q", token)
+		}
+		return auth.WorkspaceIdentity{ID: "ws-1", Name: "PocketBooks", Slug: "pocketbooks"}, nil
+	}
+	if err := auth.MigrateLegacyIfNeeded(path, identify); err != nil {
+		t.Fatalf("MigrateLegacyIfNeeded() error: %v", err)
+	}
+	if _, err := auth.ConnectWorkspace(path, profile("ws-2", "Resilion", "resilion", "a2", "r2")); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := auth.LoadStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.Workspaces) != 2 {
+		t.Fatalf("workspaces = %+v, want two named workspaces", store.Workspaces)
+	}
+	first, ok := store.Profile("ws-1")
+	if !ok || first.DisplayName() != "PocketBooks" || first.Auth.RefreshToken != "legacy-refresh" {
+		t.Fatalf("migrated workspace = %+v", first)
+	}
+
+	// A second call is a no-op once the store is in the new format.
+	if err := auth.MigrateLegacyIfNeeded(path, func(string) (auth.WorkspaceIdentity, error) {
+		t.Fatal("identify must not run for an already-migrated store")
+		return auth.WorkspaceIdentity{}, nil
+	}); err != nil {
+		t.Fatalf("second MigrateLegacyIfNeeded() error: %v", err)
+	}
+}

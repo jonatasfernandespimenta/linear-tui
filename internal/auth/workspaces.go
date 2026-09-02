@@ -182,9 +182,13 @@ func (s *Store) Put(profile WorkspaceProfile) {
 		s.Workspaces = map[string]WorkspaceProfile{}
 	}
 	s.Version = StoreVersion
-	// A profile with a real workspace ID supersedes an unidentified legacy one.
 	if profile.WorkspaceID != legacyWorkspaceKey {
-		delete(s.Workspaces, legacyWorkspaceKey)
+		// An unidentified legacy profile is superseded only when this is the
+		// same credential being identified. Otherwise it is kept, so connecting
+		// another workspace never discards the one already authenticated.
+		if legacy, ok := s.Workspaces[legacyWorkspaceKey]; ok && legacy.Auth.AccessToken == profile.Auth.AccessToken {
+			delete(s.Workspaces, legacyWorkspaceKey)
+		}
 		s.Legacy = false
 		if s.ActiveWorkspace == legacyWorkspaceKey {
 			s.ActiveWorkspace = profile.WorkspaceID
@@ -351,6 +355,32 @@ func ConnectWorkspace(path string, profile WorkspaceProfile) (Store, error) {
 	})
 }
 
+// MigrateLegacyIfNeeded identifies and migrates a legacy credentials file so a
+// second workspace can be connected alongside it. Stores already in the
+// multi-workspace format are left untouched.
+func MigrateLegacyIfNeeded(path string, identify IdentifyFunc) error {
+	store, err := LoadStore(path)
+	if err != nil {
+		if errors.Is(err, ErrCredentialsNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !store.Legacy || identify == nil {
+		return nil
+	}
+	profile, ok := store.ActiveProfile()
+	if !ok {
+		return fmt.Errorf("legacy store has no credentials")
+	}
+	identity, err := identify(profile.Auth.AccessToken)
+	if err != nil {
+		return fmt.Errorf("identify existing workspace: %w", err)
+	}
+	_, err = MigrateLegacyCredentials(path, identity)
+	return err
+}
+
 // MigrateLegacyCredentials rewrites a legacy credentials file into the
 // multi-workspace format, preserving tokens and expiry, and marking the
 // migrated workspace active. Files already in the new format are left as-is.
@@ -366,6 +396,7 @@ func MigrateLegacyCredentials(path string, identity WorkspaceIdentity) (Store, e
 		if !ok {
 			return fmt.Errorf("legacy store has no credentials")
 		}
+		delete(store.Workspaces, legacyWorkspaceKey)
 		profile.WorkspaceID = identity.ID
 		profile.WorkspaceName = identity.Name
 		profile.WorkspaceSlug = identity.Slug

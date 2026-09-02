@@ -56,6 +56,11 @@ func runAuth(args []string) int {
 			fmt.Fprintf(os.Stderr, "Error: OAuth client id is not configured. Set %s.\n", config.LinearClientIDEnv)
 			return 1
 		}
+		// Identify existing legacy credentials first so connecting another
+		// workspace adds to them instead of leaving them unnamed.
+		if err := auth.MigrateLegacyIfNeeded(storePath, identifyWorkspace); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not identify existing credentials: %v\n", err)
+		}
 		fmt.Println("Opening browser for Linear authorization...")
 		profile, err := auth.Login(ctx, auth.LoginOptions{
 			ClientID:    clientID,
