@@ -97,11 +97,12 @@ func (wm *WorkspaceSwitcherModal) Show() {
 	wm.list.AddItem("+ Connect another workspace", "", 0, nil)
 	wm.list.SetCurrentItem(current)
 
-	if envOverride {
+	switch {
+	case envOverride:
 		wm.titleView.SetText(fmt.Sprintf("%sLINEAR_API_KEY overrides saved credentials[-]", wm.app.themeTags.Warning))
-	} else if len(wm.profiles) == 0 {
+	case len(wm.profiles) == 0:
 		wm.titleView.SetText(fmt.Sprintf("%sNo workspaces connected[-]", wm.app.themeTags.SecondaryText))
-	} else {
+	default:
 		wm.titleView.SetText(fmt.Sprintf("%sActive: %s[-]", wm.app.themeTags.Accent, wm.app.ActiveWorkspaceName()))
 	}
 	wm.helpView.SetText("Enter switch | n connect | d disconnect | Esc cancel")

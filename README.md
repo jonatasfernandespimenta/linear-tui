@@ -25,6 +25,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 - Issue management (create, edit title, edit labels, archive)
 - Comments (view and add)
 - Status management (change status, assign/unassign)
+- Multiple Linear workspaces with in-app switching (`:` -> `Switch Workspace`)
 - Search and filtering
 - Sorting (by updated, created, or priority)
 - My Issues vs Other Issues sections
@@ -40,7 +41,7 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 ## Requirements
 
 - Linear authentication via either:
-  - `linear-tui auth login` (OAuth, recommended), or
+  - `linear-tui auth login` (OAuth, recommended, once per workspace), or
   - `LINEAR_API_KEY` environment variable (personal API key override)
 - Agent CLI for the agent command:
   - Claude provider: `claude`
@@ -49,8 +50,9 @@ A terminal user interface (TUI) for Linear built with Go and tview.
 ## Configuration
 
 - Prefer `linear-tui auth login` to store OAuth credentials in `~/.linear-tui/credentials.json` (mode `0600`).
+- Credentials hold one profile per connected workspace; see [Multiple workspaces](#multiple-workspaces).
 - `LINEAR_API_KEY` overrides stored OAuth credentials when set.
-- Use `linear-tui auth logout` to revoke (best effort) and delete stored credentials.
+- Use `linear-tui auth logout` to revoke (best effort) and delete stored credentials for every workspace.
 - Settings are stored in `~/.linear-tui/config.json` and created on first start.
 - Use the Settings modal from the command palette (`:` -> `Settings`) to edit and apply settings immediately.
 - UI settings in `config.json`: `theme` (`linear`, `high_contrast`, `color_blind`) and `density` (`comfortable`, `compact`).
@@ -184,6 +186,99 @@ To disable logging, set `log_file` to an empty string in the settings file or vi
 }
 ```
 
+## Multiple workspaces
+
+linear-tui can stay connected to several Linear workspaces at once and switch
+between them without restarting, re-authenticating, or editing files.
+
+### Switch workspace
+
+Press `:` to open the command palette and choose **Switch Workspace** (or press
+`O` then `W`):
+
+```text
+┌──────────────── Switch Workspace ────────────────┐
+│ Active: PocketBooks                              │
+│                                                  │
+│ > PocketBooks                              ●     │
+│   Resilion                                       │
+│   Personal                                       │
+│                                                  │
+│   + Connect another workspace                    │
+│                                                  │
+│ Enter switch | n connect | d disconnect | Esc    │
+└──────────────────────────────────────────────────┘
+```
+
+The active workspace is marked with `●` and shown in the status bar as
+`Workspace: PocketBooks`. Selecting another workspace swaps the API client,
+clears every workspace-scoped cache and selection, and loads the new
+workspace's teams, projects, issues, users, labels, statuses, and cycles in
+place.
+
+### Connect workspace
+
+`:` -> **Connect Workspace** (or `n` in the switcher) runs the browser OAuth
+flow for an additional workspace. Linear's consent screen is always shown so
+you can pick which workspace to authorize. Reconnecting a workspace that is
+already saved updates that profile instead of creating a duplicate; other
+workspaces are never touched.
+
+### Disconnect workspace
+
+`:` -> **Disconnect Workspace** (or `d` in the switcher) asks for confirmation
+and then removes the saved local credentials for that workspace only. It does
+not delete anything from Linear. Disconnecting the active workspace switches to
+another saved workspace when one exists.
+
+### CLI
+
+```bash
+linear-tui auth login              # connect a workspace (keeps existing ones)
+linear-tui auth list               # list connected workspaces
+linear-tui auth use Resilion       # set the active workspace
+linear-tui auth remove Resilion    # disconnect one workspace
+linear-tui auth logout             # revoke and remove every workspace
+```
+
+`auth list` prints the saved workspaces and marks the active one:
+
+```text
+WORKSPACE                STATUS
+PocketBooks              active
+Resilion
+Personal
+```
+
+Workspaces can be referenced by name, URL slug, or workspace ID; identity is
+tracked internally by the stable Linear workspace ID, so renames are safe.
+
+### LINEAR_API_KEY precedence
+
+`LINEAR_API_KEY` remains an explicit, process-level override:
+
+- it takes precedence over every saved workspace,
+- it is never written to the credentials file,
+- workspace switching is disabled while it is set, and the switcher shows
+  `● ENV` next to the active workspace.
+
+```text
+Workspace switching is unavailable while LINEAR_API_KEY overrides saved credentials.
+```
+
+Unset the variable and restart linear-tui to switch between saved workspaces.
+
+### Credential migration
+
+Credentials from earlier versions (a single workspace at
+`~/.linear-tui/credentials.json`) keep working. On the first launch after
+upgrading, linear-tui identifies the workspace behind the existing token and
+rewrites the file in the multi-workspace format, preserving the access token,
+refresh token, and expiry, and marking that workspace active. No re-login is
+required; if the workspace cannot be reached the old file is left untouched and
+migration is retried on the next launch. Writes are atomic and the file keeps
+mode `0600`. Each workspace refreshes its own OAuth tokens independently.
+
 ## Keyboard Shortcuts
 
 ### Navigation
@@ -204,7 +299,9 @@ To disable logging, set `log_file` to an empty string in the settings file or vi
 
 - `:` - Open command palette
 - `/` - Open search palette
+- `O` then `W` - Switch workspace
 - `ask agent` - Run a terminal agent on the selected issue
+- `switch workspace` / `connect workspace` / `disconnect workspace` - Manage Linear workspaces
 
 ### Quick Commands
 
