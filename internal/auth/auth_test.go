@@ -210,7 +210,7 @@ func TestLoginHappyPath(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "credentials.json")
 	_ = auth.SaveCredentials(storePath, auth.Credentials{AccessToken: "old", RefreshToken: "old", ExpiresAt: time.Now().Add(time.Hour)})
 
-	err = auth.Login(context.Background(), auth.LoginOptions{
+	_, err = auth.Login(context.Background(), auth.LoginOptions{
 		ClientID:     "client",
 		StorePath:    storePath,
 		RedirectURI:  redirectURI,
@@ -266,7 +266,7 @@ func TestLoginStateMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = auth.Login(context.Background(), auth.LoginOptions{
+	_, err = auth.Login(context.Background(), auth.LoginOptions{
 		ClientID:     "client",
 		StorePath:    storePath,
 		RedirectURI:  redirectURI,
@@ -307,7 +307,7 @@ func TestLoginTimeout(t *testing.T) {
 	listenAddr := ln.Addr().String()
 	_ = ln.Close()
 
-	err = auth.Login(context.Background(), auth.LoginOptions{
+	_, err = auth.Login(context.Background(), auth.LoginOptions{
 		ClientID:     "client",
 		StorePath:    filepath.Join(t.TempDir(), "credentials.json"),
 		RedirectURI:  "http://" + listenAddr + "/callback",

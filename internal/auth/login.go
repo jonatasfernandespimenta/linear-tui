@@ -23,18 +23,26 @@ type LoginOptions struct {
 	AuthorizeURL string
 	OpenBrowser  func(url string) error
 	OAuthClient  *oauth.Client
+
+	// Identify resolves the workspace the new token belongs to. When set, the
+	// credentials are saved as a workspace profile in the multi-workspace store
+	// (adding to, never replacing, previously connected workspaces). When nil,
+	// the legacy single-workspace file is written instead.
+	Identify IdentifyFunc
 }
 
 // Login runs the OAuth PKCE loopback flow and stores credentials on success.
-func Login(ctx context.Context, opts LoginOptions) error {
+// It returns the connected workspace profile (empty when no Identify function
+// is configured and the legacy credentials file was written).
+func Login(ctx context.Context, opts LoginOptions) (WorkspaceProfile, error) {
 	if opts.ClientID == "" {
-		return fmt.Errorf("oauth client id is empty; set LINEAR_CLIENT_ID or embed DefaultClientID")
+		return WorkspaceProfile{}, fmt.Errorf("oauth client id is empty; set LINEAR_CLIENT_ID or embed DefaultClientID")
 	}
 	if opts.StorePath == "" {
-		return fmt.Errorf("credentials store path is empty")
+		return WorkspaceProfile{}, fmt.Errorf("credentials store path is empty")
 	}
 	if opts.OAuthClient == nil {
-		return fmt.Errorf("oauth client is nil")
+		return WorkspaceProfile{}, fmt.Errorf("oauth client is nil")
 	}
 
 	scopes := opts.Scopes
@@ -64,21 +72,21 @@ func Login(ctx context.Context, opts LoginOptions) error {
 
 	verifier, challenge, err := GeneratePKCE()
 	if err != nil {
-		return err
+		return WorkspaceProfile{}, err
 	}
 	state, err := GenerateState()
 	if err != nil {
-		return err
+		return WorkspaceProfile{}, err
 	}
 
 	authURL, err := buildAuthorizeURL(authorizeURL, opts.ClientID, redirectURI, scopes, state, challenge)
 	if err != nil {
-		return err
+		return WorkspaceProfile{}, err
 	}
 
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w (is another login in progress?)", listenAddr, err)
+		return WorkspaceProfile{}, fmt.Errorf("listen on %s: %w (is another login in progress?)", listenAddr, err)
 	}
 	defer func() { _ = ln.Close() }()
 
@@ -136,7 +144,7 @@ func Login(ctx context.Context, opts LoginOptions) error {
 	}()
 
 	if err := openBrowser(authURL); err != nil {
-		return fmt.Errorf("open browser to %s: %w", authURL, err)
+		return WorkspaceProfile{}, fmt.Errorf("open browser to %s: %w", authURL, err)
 	}
 
 	loginCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -145,24 +153,37 @@ func Login(ctx context.Context, opts LoginOptions) error {
 	var code string
 	select {
 	case <-loginCtx.Done():
-		return fmt.Errorf("login timed out after %s: %w", timeout, loginCtx.Err())
+		return WorkspaceProfile{}, fmt.Errorf("login timed out after %s: %w", timeout, loginCtx.Err())
 	case res := <-resultCh:
 		if res.err != nil {
-			return res.err
+			return WorkspaceProfile{}, res.err
 		}
 		code = res.code
 	}
 
 	token, err := opts.OAuthClient.ExchangeCode(ctx, code, redirectURI, verifier)
 	if err != nil {
-		return fmt.Errorf("exchange authorization code: %w", err)
+		return WorkspaceProfile{}, fmt.Errorf("exchange authorization code: %w", err)
 	}
 	if token.RefreshToken == "" {
-		return fmt.Errorf("token response missing refresh_token; enable refresh tokens on the OAuth app")
+		return WorkspaceProfile{}, fmt.Errorf("token response missing refresh_token; enable refresh tokens on the OAuth app")
 	}
 
 	creds := CredentialsFromTokenResponse(token, time.Now())
-	return SaveCredentials(opts.StorePath, creds)
+	if opts.Identify == nil {
+		return WorkspaceProfile{}, SaveCredentials(opts.StorePath, creds)
+	}
+
+	identity, err := opts.Identify(creds.AccessToken)
+	if err != nil {
+		// Leave saved workspaces untouched when the workspace cannot be identified.
+		return WorkspaceProfile{}, fmt.Errorf("identify workspace: %w", err)
+	}
+	profile := ProfileFromCredentials(identity, creds)
+	if _, err := ConnectWorkspace(opts.StorePath, profile); err != nil {
+		return WorkspaceProfile{}, err
+	}
+	return profile, nil
 }
 
 // buildAuthorizeURL constructs the Linear authorize URL with PKCE parameters.
@@ -179,6 +200,9 @@ func buildAuthorizeURL(base, clientID, redirectURI, scopes, state, challenge str
 	q.Set("state", state)
 	q.Set("code_challenge", challenge)
 	q.Set("code_challenge_method", "S256")
+	// Linear recommends prompt=consent so the authorization screen always lets
+	// the user pick which workspace to grant access to (multi-workspace setups).
+	q.Set("prompt", "consent")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
@@ -187,9 +211,13 @@ func buildAuthorizeURL(base, clientID, redirectURI, scopes, state, challenge str
 func PrintAuthUsage(w interface{ Write([]byte) (int, error) }) {
 	msg := strings.TrimSpace(`
 Usage:
-  linear-tui auth login    Authenticate with Linear via browser OAuth
-  linear-tui auth logout   Revoke and remove stored OAuth credentials
+  linear-tui auth login             Connect a Linear workspace via browser OAuth
+  linear-tui auth list              List connected workspaces
+  linear-tui auth use <workspace>   Set the active workspace
+  linear-tui auth remove <ws>       Disconnect a saved workspace
+  linear-tui auth logout            Revoke and remove all stored credentials
 
+"auth login" adds a workspace; previously connected workspaces are kept.
 LINEAR_API_KEY overrides stored OAuth credentials when set.
 `) + "\n"
 	_, _ = w.Write([]byte(msg))

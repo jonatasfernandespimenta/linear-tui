@@ -47,21 +47,46 @@ func SaveCredentials(path string, creds Credentials) error {
 	if path == "" {
 		return fmt.Errorf("credentials path is empty")
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create credentials directory: %w", err)
-	}
 	data, err := json.MarshalIndent(creds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	return writeFileAtomic(path, append(data, '\n'))
+}
+
+// writeFileAtomic writes data to path with mode 0600 through a temporary file
+// in the same directory, so a crash mid-write cannot truncate credentials.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create credentials directory: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(dir, ".credentials-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp credentials file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Best effort cleanup; a no-op once the rename succeeded.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod credentials: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("write credentials: %w", err)
 	}
-	// Ensure mode even if umask altered WriteFile permissions.
-	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("chmod credentials: %w", err)
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync credentials: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close credentials: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace credentials: %w", err)
 	}
 	return nil
 }

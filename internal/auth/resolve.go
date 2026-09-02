@@ -10,13 +10,14 @@ import (
 	"github.com/roeyazroel/linear-tui/internal/config"
 )
 
-// Resolve selects an API token: LINEAR_API_KEY overrides stored OAuth credentials.
+// Resolve selects an API token: LINEAR_API_KEY overrides stored credentials.
+// Without an API key it resolves the active workspace of the credentials store.
 func Resolve(ctx context.Context, apiKey string, storePath string, oauthClient *oauth.Client) (ResolvedAuth, error) {
 	if apiKey != "" {
 		return ResolvedAuth{Token: apiKey, Source: TokenSourceAPIKey}, nil
 	}
 
-	creds, err := LoadCredentials(storePath)
+	store, err := LoadStore(storePath)
 	if err != nil {
 		if errors.Is(err, ErrCredentialsNotFound) {
 			return ResolvedAuth{}, fmt.Errorf("not authenticated: run `linear-tui auth login` or set %s", config.LinearAPIKeyEnv)
@@ -24,22 +25,44 @@ func Resolve(ctx context.Context, apiKey string, storePath string, oauthClient *
 		return ResolvedAuth{}, err
 	}
 
-	updated, refreshed, err := EnsureAccessToken(ctx, creds, oauthClient, time.Now(), oauth.RefreshSkew, false)
-	if err != nil {
-		return ResolvedAuth{}, fmt.Errorf("refresh oauth credentials: %w (re-run `linear-tui auth login`)", err)
-	}
-	if refreshed {
-		if err := SaveCredentials(storePath, updated); err != nil {
-			return ResolvedAuth{}, fmt.Errorf("save refreshed credentials: %w", err)
-		}
-	}
+	return ResolveWorkspace(ctx, storePath, store.ActiveWorkspace, oauthClient)
+}
 
-	expiresAt := updated.ExpiresAt
-	return ResolvedAuth{
-		Token:     updated.AccessToken,
-		Source:    TokenSourceOAuth,
-		ExpiresAt: &expiresAt,
-	}, nil
+// ResolveWorkspace returns a usable access token for one saved workspace,
+// refreshing and persisting only that workspace's credentials when needed.
+func ResolveWorkspace(ctx context.Context, storePath, workspaceID string, oauthClient *oauth.Client) (ResolvedAuth, error) {
+	var resolved ResolvedAuth
+
+	_, err := UpdateStore(storePath, func(store *Store) error {
+		profile, ok := store.Profile(workspaceID)
+		if !ok {
+			return fmt.Errorf("workspace %q is not connected: run `linear-tui auth login`", workspaceID)
+		}
+
+		updated, refreshed, err := EnsureAccessToken(ctx, profile.Credentials(), oauthClient, time.Now(), oauth.RefreshSkew, false)
+		if err != nil {
+			return fmt.Errorf("refresh oauth credentials: %w (re-run `linear-tui auth login`)", err)
+		}
+		if refreshed {
+			profile.Auth = authFromCredentials(updated)
+			store.Put(profile)
+		}
+
+		expiresAt := profile.Auth.ExpiresAt
+		resolved = ResolvedAuth{
+			Token:         profile.Auth.AccessToken,
+			Source:        TokenSourceOAuth,
+			ExpiresAt:     &expiresAt,
+			WorkspaceID:   profile.WorkspaceID,
+			WorkspaceName: profile.DisplayName(),
+			Legacy:        store.Legacy,
+		}
+		return nil
+	})
+	if err != nil {
+		return ResolvedAuth{}, err
+	}
+	return resolved, nil
 }
 
 // EnsureAccessToken refreshes credentials when force is set or the access token
@@ -89,21 +112,28 @@ func CredentialsFromTokenResponse(token oauth.TokenResponse, now time.Time) Cred
 	}
 }
 
-// NewRefreshFunc returns a callback that force-refreshes stored OAuth credentials.
-// Suitable for linearapi unauthorized retry wiring.
-func NewRefreshFunc(storePath string, oauthClient *oauth.Client) func(ctx context.Context) (string, error) {
+// NewRefreshFunc returns a callback that force-refreshes one workspace's stored
+// OAuth credentials. Suitable for linearapi unauthorized retry wiring.
+func NewRefreshFunc(storePath, workspaceID string, oauthClient *oauth.Client) func(ctx context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
-		creds, err := LoadCredentials(storePath)
+		var token string
+		_, err := UpdateStore(storePath, func(store *Store) error {
+			profile, ok := store.Profile(workspaceID)
+			if !ok {
+				return fmt.Errorf("workspace %q is not connected", workspaceID)
+			}
+			updated, _, err := EnsureAccessToken(ctx, profile.Credentials(), oauthClient, time.Now(), 0, true)
+			if err != nil {
+				return err
+			}
+			profile.Auth = authFromCredentials(updated)
+			store.Put(profile)
+			token = updated.AccessToken
+			return nil
+		})
 		if err != nil {
 			return "", err
 		}
-		updated, _, err := EnsureAccessToken(ctx, creds, oauthClient, time.Now(), 0, true)
-		if err != nil {
-			return "", err
-		}
-		if err := SaveCredentials(storePath, updated); err != nil {
-			return "", err
-		}
-		return updated.AccessToken, nil
+		return token, nil
 	}
 }

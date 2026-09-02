@@ -12,7 +12,8 @@ const (
 	TokenSourceOAuth TokenSource = "oauth"
 )
 
-// Credentials are persisted OAuth tokens under ~/.linear-tui/credentials.json.
+// Credentials are OAuth tokens in the legacy (pre-v2) single-workspace file
+// under ~/.linear-tui/credentials.json. See Store for the current format.
 type Credentials struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
@@ -27,4 +28,13 @@ type ResolvedAuth struct {
 	Token     string
 	Source    TokenSource
 	ExpiresAt *time.Time
+
+	// WorkspaceID is the stable Linear workspace the token belongs to. It is
+	// empty for API-key auth and for legacy credentials not yet identified.
+	WorkspaceID string
+	// WorkspaceName is the human-readable workspace name, when known.
+	WorkspaceName string
+	// Legacy reports that the token came from the pre-v2 credentials file and
+	// still needs migrating into the multi-workspace store.
+	Legacy bool
 }
