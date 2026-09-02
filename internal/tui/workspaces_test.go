@@ -193,7 +193,30 @@ func newWorkspaceTestApp(t *testing.T, endpoint, storePath string) *App {
 		Endpoint:  endpoint,
 	})
 	app := NewApp(client, cfg, nil)
-	app.queueUpdateDraw = func(f func()) { f() }
+	// Run queued UI updates inline, and stop running them once the test ends so
+	// background work cannot touch tview state while the next test builds an app.
+	var (
+		mu      sync.Mutex
+		closed  bool
+		pending sync.WaitGroup
+	)
+	app.queueUpdateDraw = func(f func()) {
+		mu.Lock()
+		if closed {
+			mu.Unlock()
+			return
+		}
+		pending.Add(1)
+		mu.Unlock()
+		defer pending.Done()
+		f()
+	}
+	t.Cleanup(func() {
+		mu.Lock()
+		closed = true
+		mu.Unlock()
+		pending.Wait()
+	})
 	app.preloadTeamMetadataFunc = func(string) {}
 	app.ConfigureWorkspaces(WorkspaceOptions{
 		StorePath:     storePath,
@@ -447,6 +470,13 @@ func TestSwitchWorkspaceDisabledByAPIKeyOverride(t *testing.T) {
 	}
 	if !strings.Contains(app.statusMessage, "LINEAR_API_KEY") {
 		t.Fatalf("status message = %q, want an override explanation", app.statusMessage)
+	}
+
+	// The switcher marks the environment-provided workspace.
+	app.ShowWorkspaceSwitcher()
+	first, _ := app.workspaceSwitcher.list.GetItemText(0)
+	if !strings.Contains(first, "ENV") {
+		t.Fatalf("first row = %q, want an ENV marker on the active workspace", first)
 	}
 	store, err := auth.LoadStore(storePath)
 	if err != nil {

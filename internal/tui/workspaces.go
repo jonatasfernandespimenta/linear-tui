@@ -124,7 +124,8 @@ func (a *App) reloadWorkspaceProfiles() {
 	profiles := store.List()
 	a.workspaceMu.Lock()
 	a.workspaceProfiles = profiles
-	// Adopt the persisted identity when startup could not supply one.
+	// Adopt the persisted identity when startup could not supply one. An API-key
+	// override keeps its own identity, resolved from the token itself.
 	if a.workspaceID == "" && !a.workspaceEnvOverride {
 		a.workspaceID = store.ActiveWorkspace
 	}
@@ -149,9 +150,9 @@ func (a *App) loadWorkspaceIdentity(ctx context.Context) {
 	a.queueWorkspaceUpdate(generation, func() {
 		a.workspaceMu.Lock()
 		a.workspaceName = workspace.Name
-		if !a.workspaceEnvOverride {
-			a.workspaceID = workspace.ID
-		}
+		// Also recorded for an API-key override so the switcher can mark which
+		// saved workspace the environment token belongs to.
+		a.workspaceID = workspace.ID
 		a.workspaceMu.Unlock()
 		a.updateStatusBar()
 	})
