@@ -92,7 +92,7 @@ func (a *App) WorkspaceGeneration() int64 {
 // queueWorkspaceUpdate queues a UI update that is dropped when the workspace
 // changed after the background work was started.
 func (a *App) queueWorkspaceUpdate(generation int64, f func()) {
-	a.queueUpdateDraw(func() {
+	a.QueueUpdateDraw(func() {
 		if generation != a.workspaceGeneration.Load() {
 			logger.Debug("tui.workspace: dropping stale UI update generation=%d", generation)
 			return
@@ -208,7 +208,7 @@ func (a *App) SwitchWorkspace(workspaceID string) {
 		resolved, err := auth.ResolveWorkspace(ctx, storePath, workspaceID, oauthClient)
 		if err != nil {
 			logger.ErrorWithErr(err, "tui.workspace: failed to resolve workspace workspace_id=%s", workspaceID)
-			a.queueUpdateDraw(func() {
+			a.QueueUpdateDraw(func() {
 				a.showWorkspaceError(target, err)
 			})
 			return
@@ -221,13 +221,13 @@ func (a *App) SwitchWorkspace(workspaceID string) {
 			return nil
 		}); err != nil {
 			logger.ErrorWithErr(err, "tui.workspace: failed to persist active workspace workspace_id=%s", workspaceID)
-			a.queueUpdateDraw(func() {
+			a.QueueUpdateDraw(func() {
 				a.showWorkspaceError(target, err)
 			})
 			return
 		}
 
-		a.queueUpdateDraw(func() {
+		a.QueueUpdateDraw(func() {
 			a.applyWorkspace(resolved)
 			a.flashStatus(fmt.Sprintf("Workspace: %s", a.ActiveWorkspaceName()))
 		})
@@ -335,14 +335,14 @@ func (a *App) ConnectWorkspace() {
 		})
 		if err != nil {
 			logger.ErrorWithErr(err, "tui.workspace: connect workspace failed")
-			a.queueUpdateDraw(func() {
+			a.QueueUpdateDraw(func() {
 				a.showWorkspaceError("the new workspace", err)
 			})
 			return
 		}
 
 		a.reloadWorkspaceProfiles()
-		a.queueUpdateDraw(func() {
+		a.QueueUpdateDraw(func() {
 			a.flashStatus(fmt.Sprintf("Connected workspace: %s", profile.DisplayName()))
 		})
 		a.SwitchWorkspace(profile.WorkspaceID)
@@ -397,14 +397,14 @@ func (a *App) disconnectWorkspaceConfirmed(workspaceID, name string) {
 		}, workspaceID)
 		if err != nil {
 			logger.ErrorWithErr(err, "tui.workspace: failed to remove workspace workspace_id=%s", workspaceID)
-			a.queueUpdateDraw(func() {
+			a.QueueUpdateDraw(func() {
 				a.showWorkspaceError(name, err)
 			})
 			return
 		}
 
 		a.reloadWorkspaceProfiles()
-		a.queueUpdateDraw(func() {
+		a.QueueUpdateDraw(func() {
 			a.flashStatus(fmt.Sprintf("Disconnected workspace: %s", name))
 			a.updateStatusBar()
 		})
@@ -416,7 +416,7 @@ func (a *App) disconnectWorkspaceConfirmed(workspaceID, name string) {
 			a.SwitchWorkspace(next.WorkspaceID)
 			return
 		}
-		a.queueUpdateDraw(func() {
+		a.QueueUpdateDraw(func() {
 			a.workspaceMu.Lock()
 			a.workspaceID = ""
 			a.workspaceName = ""
